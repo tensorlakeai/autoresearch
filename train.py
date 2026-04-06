@@ -426,16 +426,19 @@ class MuonAdamW(torch.optim.Optimizer):
                 self._step_muon(group)
 
 # ---------------------------------------------------------------------------
-# TensorLake CPU Smoke Test (optional — set TENSORLAKE_SMOKE=1 to enable)
+# TensorLake CPU Smoke Test (optional — activated by setting TENSORLAKE_API_KEY)
 # Screens this script in a CPU sandbox before committing GPU time.
-# Requires: pip install tensorlake  (sandbox must have torch CPU available)
+# Activate:   export TENSORLAKE_API_KEY=<your-key>
+# Deactivate: unset TENSORLAKE_API_KEY
 # ---------------------------------------------------------------------------
 
 _TENSORLAKE_SMOKE = os.environ.get("TENSORLAKE_API_KEY") is not None
+print(f"TensorLake sandbox screening: {'ENABLED' if _TENSORLAKE_SMOKE else 'disabled (set TENSORLAKE_API_KEY to enable)'}", flush=True)
 
 if _TENSORLAKE_SMOKE:
     try:
         from tensorlake.sandbox import SandboxClient as _SandboxClient
+        print("tensorlake imported successfully", flush=True)
     except ImportError as _e:
         raise ImportError(
             "tensorlake not found — install it with: pip install tensorlake"
