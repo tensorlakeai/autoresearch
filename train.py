@@ -503,6 +503,12 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
             source,
             flags=re.DOTALL,
         )
+        # The call site (if _TENSORLAKE_SMOKE: run_smoke_test(...)) is outside
+        # the stripped section — define the variable as False so it is skipped
+        source = source.replace(
+            "_TENSORLAKE_SMOKE = os.environ.get(\"TENSORLAKE_API_KEY\") is not None",
+            "_TENSORLAKE_SMOKE = False  # [smoke] disabled inside CPU script",
+        )
 
         # Replace FA3 import block with pure-PyTorch SDPA shim
         source = re.sub(
@@ -577,7 +583,7 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
         # timeout_secs covers pip install (~60s) + script run (20s) + overhead
         with sb.create_and_connect(memory_mb=2048, timeout_secs=180) as box:
             # Install the only non-stdlib dependency: CPU-only torch
-            install = box.run("python3", ["-m", "pip", "install", "torch", "--extra-index-url", "https://download.pytorch.org/whl/cpu", "--break-system-packages"])
+            install = box.run("python3", ["-m", "pip", "install", "torch", "numpy", "--extra-index-url", "https://download.pytorch.org/whl/cpu", "--break-system-packages"])
             check = box.run("python3", ["-c", "import torch; print('torch ok')"])
             if "torch ok" not in (check.stdout or ""):
                 install_log = (install.stdout or "") + (install.stderr or "")
