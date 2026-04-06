@@ -504,10 +504,11 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
             flags=re.DOTALL,
         )
         # The call site (if _TENSORLAKE_SMOKE: run_smoke_test(...)) is outside
-        # the stripped section — inject False before it so the block is skipped
+        # the stripped section — inject False before the Training loop section
+        # so the variable is defined before the call site is reached
         source = source.replace(
-            "t_start_training = time.time()",
-            "_TENSORLAKE_SMOKE = False  # [smoke] disabled inside CPU script\nt_start_training = time.time()",
+            "# ---------------------------------------------------------------------------\n# Training loop\n",
+            "_TENSORLAKE_SMOKE = False  # [smoke] disabled inside CPU script\n# ---------------------------------------------------------------------------\n# Training loop\n",
         )
 
         # Replace FA3 import block with pure-PyTorch SDPA shim
