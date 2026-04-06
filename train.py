@@ -577,15 +577,11 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
         # timeout_secs covers pip install (~60s) + script run (20s) + overhead
         with sb.create_and_connect(memory_mb=2048, timeout_secs=180) as box:
             # Install the only non-stdlib dependency: CPU-only torch
-            box.run("python3", [
-                "-m", "pip", "install", "torch",
-                "--index-url", "https://download.pytorch.org/whl/cpu",
-                "--quiet",
-            ])
-            # Verify torch is importable before running the script
+            install = box.run("python3", ["-m", "pip", "install", "torch", "--extra-index-url", "https://download.pytorch.org/whl/cpu"])
             check = box.run("python3", ["-c", "import torch; print('torch ok')"])
             if "torch ok" not in (check.stdout or ""):
-                return {"status": "fail", "error": f"torch install failed:\n{(check.stderr or '')[-400:]}"}
+                install_log = (install.stdout or "") + (install.stderr or "")
+                return {"status": "fail", "error": f"torch install failed:\n{install_log[-600:]}"}
             box.write_file("/workspace/smoke_train.py", cpu_script.encode())
             ex = box.run("python3", ["/workspace/smoke_train.py"], timeout=120)
             stdout = (ex.stdout or "").strip()
