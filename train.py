@@ -563,15 +563,27 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
         return source
 
     def run_smoke_test(filepath: str) -> dict:
-        """Read train.py, patch it for CPU, run it in a TensorLake sandbox."""
+        """Read train.py, patch it for CPU, run it in a TensorLake sandbox.
+
+        The patched script only needs torch (CPU). All other imports are either
+        stdlib or replaced by inline stubs (_make_cpu_script removes kernels/FA3
+        and prepare.py, substituting pure-PyTorch/random-data equivalents).
+        """
         import re
         with open(filepath) as f:
             source = f.read()
         cpu_script = _make_cpu_script(source)
         sb = _SandboxClient()
-        with sb.create_and_connect(memory_mb=2048, timeout_secs=120) as box:
+        # timeout_secs covers pip install (~60s) + script run (20s) + overhead
+        with sb.create_and_connect(memory_mb=2048, timeout_secs=180) as box:
+            # Install the only non-stdlib dependency: CPU-only torch
+            box.run("pip", [
+                "install", "torch",
+                "--index-url", "https://download.pytorch.org/whl/cpu",
+                "--quiet",
+            ])
             box.write_file("/workspace/smoke_train.py", cpu_script.encode())
-            ex = box.run("python3", ["/workspace/smoke_train.py"], timeout=100)
+            ex = box.run("python3", ["/workspace/smoke_train.py"], timeout=120)
             stdout = (ex.stdout or "").strip()
             stderr = (ex.stderr or "").strip()
         m = re.search(r"smoke_loss:\s*([\d.]+)", stdout)
