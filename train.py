@@ -504,10 +504,10 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
             flags=re.DOTALL,
         )
         # The call site (if _TENSORLAKE_SMOKE: run_smoke_test(...)) is outside
-        # the stripped section — define the variable as False so it is skipped
+        # the stripped section — inject False before it so the block is skipped
         source = source.replace(
-            "_TENSORLAKE_SMOKE = os.environ.get(\"TENSORLAKE_API_KEY\") is not None",
-            "_TENSORLAKE_SMOKE = False  # [smoke] disabled inside CPU script",
+            "t_start_training = time.time()",
+            "_TENSORLAKE_SMOKE = False  # [smoke] disabled inside CPU script\nt_start_training = time.time()",
         )
 
         # Replace FA3 import block with pure-PyTorch SDPA shim
