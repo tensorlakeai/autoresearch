@@ -577,7 +577,7 @@ TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum ste
         # timeout_secs covers pip install (~60s) + script run (20s) + overhead
         with sb.create_and_connect(memory_mb=2048, timeout_secs=180) as box:
             # Install the only non-stdlib dependency: CPU-only torch
-            install = box.run("python3", ["-m", "pip", "install", "torch", "--extra-index-url", "https://download.pytorch.org/whl/cpu"])
+            install = box.run("python3", ["-m", "pip", "install", "torch", "--extra-index-url", "https://download.pytorch.org/whl/cpu", "--break-system-packages"])
             check = box.run("python3", ["-c", "import torch; print('torch ok')"])
             if "torch ok" not in (check.stdout or ""):
                 install_log = (install.stdout or "") + (install.stderr or "")
