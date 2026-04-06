@@ -452,9 +452,7 @@ class _SdpaMock:
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         out = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=causal)
         return out.transpose(1, 2).contiguous()
-class _FA3:
-    flash_attn_interface = _SdpaMock()
-fa3 = _FA3()
+fa3 = _SdpaMock()
 """
 
     _PREPARE_STUBS = """\
