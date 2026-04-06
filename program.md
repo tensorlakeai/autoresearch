@@ -22,6 +22,8 @@ Once you get confirmation, kick off the experimentation.
 
 Each experiment runs on a single GPU. The training script runs for a **fixed time budget of 5 minutes** (wall clock training time, excluding startup/compilation). You launch it simply as: `uv run train.py`.
 
+**Optional CPU pre-screening (TensorLake)**: If `TENSORLAKE_API_KEY` is set, each run automatically screens the candidate in a CPU sandbox before committing GPU time. A failed smoke test exits immediately with `SMOKE FAIL` — saving ~5 minutes on broken candidates (crashes, shape errors, diverging loss). Disable by unsetting the key. Smoke test results (`smoke_loss`) are not comparable to `val_bpb`; they only filter out broken code.
+
 **What you CAN do:**
 - Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, training loop, batch size, model size, etc.
 

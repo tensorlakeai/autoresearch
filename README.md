@@ -39,6 +39,42 @@ uv run train.py
 
 If the above commands all work ok, your setup is working and you can go into autonomous research mode.
 
+## CPU pre-screening with TensorLake sandboxes
+
+Each GPU experiment takes ~5 minutes. To avoid wasting GPU time on broken candidates (crashes, shape errors, diverging loss), this fork integrates [TensorLake sandboxes](https://docs.tensorlake.ai/sandboxes/) for optional CPU pre-screening. When enabled, `train.py` patches itself into a CPU-compatible smoke test, uploads it to an ephemeral sandbox, and runs it for 20 seconds before touching the GPU. Only candidates that pass get the full 5-minute GPU run.
+
+Sandboxes are **activated by setting `TENSORLAKE_API_KEY`** and **deactivated by unsetting it** — no other flag needed.
+
+```bash
+# Install tensorlake (already in pyproject.toml, included by uv sync)
+# Get your API key at cloud.tensorlake.ai
+
+# Activate: set the key and sandboxes run automatically before every GPU experiment
+export TENSORLAKE_API_KEY=<your-api-key>
+uv run train.py
+
+# Deactivate: unset the key and train.py runs exactly as the original repo
+unset TENSORLAKE_API_KEY
+uv run train.py
+```
+
+Expected output when the smoke test passes:
+```
+Running CPU smoke test in TensorLake sandbox...
+Smoke test passed (smoke_loss=9.1032)
+[... normal GPU training begins ...]
+```
+
+Expected output when the smoke test catches a broken candidate:
+```
+Running CPU smoke test in TensorLake sandbox...
+SMOKE FAIL: Traceback (most recent call last):
+  ...
+AttributeError: 'NoneType' object has no attribute 'forward'
+```
+
+The `smoke_loss` value is not comparable to `val_bpb` — it is a rough cross-entropy on random tokens, used only to filter out broken code. The ground-truth metric is always `val_bpb` from the full GPU run.
+
 ## Running the agent
 
 Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:

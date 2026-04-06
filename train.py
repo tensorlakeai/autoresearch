@@ -426,6 +426,157 @@ class MuonAdamW(torch.optim.Optimizer):
                 self._step_muon(group)
 
 # ---------------------------------------------------------------------------
+# TensorLake CPU Smoke Test (optional — set TENSORLAKE_SMOKE=1 to enable)
+# Screens this script in a CPU sandbox before committing GPU time.
+# Requires: pip install tensorlake  (sandbox must have torch CPU available)
+# ---------------------------------------------------------------------------
+
+_TENSORLAKE_SMOKE = os.environ.get("TENSORLAKE_API_KEY") is not None
+
+if _TENSORLAKE_SMOKE:
+    try:
+        from tensorlake.sandbox import SandboxClient as _SandboxClient
+    except ImportError as _e:
+        raise ImportError(
+            "tensorlake not found — install it with: pip install tensorlake"
+        ) from _e
+
+    # Replacement strings injected into the patched CPU script
+    _FA3_SHIM = """\
+# [smoke] FA3 replaced with a pure-PyTorch SDPA shim
+class _SdpaMock:
+    def flash_attn_func(self, q, k, v, causal=True, window_size=None):
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=causal)
+        return out.transpose(1, 2).contiguous()
+class _FA3:
+    flash_attn_interface = _SdpaMock()
+fa3 = _FA3()
+"""
+
+    _PREPARE_STUBS = """\
+# [smoke] Inline CPU stubs — replaces prepare.py imports
+MAX_SEQ_LEN = 256    # reduced for CPU smoke test
+TIME_BUDGET  = 20    # 20-second smoke run
+EVAL_TOKENS  = 4096  # minimal eval
+
+class Tokenizer:
+    @classmethod
+    def from_directory(cls, tokenizer_dir=None): return cls()
+    def get_vocab_size(self): return 8192
+    def get_bos_token_id(self): return 0
+
+def make_dataloader(tokenizer, B, T, split, buffer_size=None):
+    while True:
+        x = torch.randint(0, 8192, (B, T))
+        y = torch.randint(0, 8192, (B, T))
+        yield x, y, 1
+
+def evaluate_bpb(model, tokenizer, batch_size):
+    model.eval()
+    total = 0.0
+    with torch.no_grad():
+        for _ in range(4):
+            x = torch.randint(0, 8192, (batch_size, MAX_SEQ_LEN))
+            y = torch.randint(0, 8192, (batch_size, MAX_SEQ_LEN))
+            total += model(x, y).item()
+    return total / 4
+"""
+
+    _SMOKE_OVERRIDES = """\
+# [smoke] Override batch dimensions to fit CPU memory — injected before Setup
+DEVICE_BATCH_SIZE = 2
+TOTAL_BATCH_SIZE  = DEVICE_BATCH_SIZE * MAX_SEQ_LEN  # single gradient-accum step
+"""
+
+    def _make_cpu_script(source: str) -> str:
+        """Patch train.py source into a CPU-runnable smoke test."""
+        import re
+
+        # Strip this TensorLake section from the script (avoid recursion)
+        source = re.sub(
+            r"# -{74,}\n# TensorLake CPU Smoke Test.*?(?=# -{74,}\n# Hyperparameters)",
+            "",
+            source,
+            flags=re.DOTALL,
+        )
+
+        # Replace FA3 import block with pure-PyTorch SDPA shim
+        source = re.sub(
+            r"from kernels import get_kernel\n.*?fa3 = get_kernel\(repo\)\.flash_attn_interface\n",
+            _FA3_SHIM,
+            source,
+            flags=re.DOTALL,
+        )
+
+        # Replace prepare.py import line with inline CPU stubs
+        source = source.replace(
+            "from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb",
+            _PREPARE_STUBS,
+        )
+
+        # CPU device — remove all CUDA assumptions
+        source = source.replace('device = torch.device("cuda")', 'device = torch.device("cpu")')
+        source = source.replace(
+            "autocast_ctx = torch.amp.autocast(device_type=\"cuda\", dtype=torch.bfloat16)",
+            "import contextlib; autocast_ctx = contextlib.nullcontext()",
+        )
+        source = source.replace("torch.cuda.manual_seed(42)", "")
+        source = source.replace('torch.set_float32_matmul_precision("high")', "")
+
+        # CPU-safe model instantiation (no meta-device init trick)
+        source = source.replace(
+            "with torch.device(\"meta\"):\n    model = GPT(config)\nmodel.to_empty(device=device)",
+            "model = GPT(config).to(device)",
+        )
+
+        # Float32 throughout (CPU bfloat16 has limited op coverage)
+        source = source.replace(".bfloat16()", ".float()")
+        source = source.replace("dtype=torch.bfloat16", "dtype=torch.float32")
+
+        # Disable torch.compile (compile overhead dominates a 20-second run)
+        source = re.sub(r"@torch\.compile\([^)]*\)\n", "", source)
+        source = source.replace("model = torch.compile(model, dynamic=False)", "")
+
+        # Remove CUDA-only runtime calls
+        source = re.sub(r"[ \t]*torch\.cuda\.synchronize\(\)[ \t]*\n", "", source)
+        source = source.replace(
+            "peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024",
+            "peak_vram_mb = 0.0",
+        )
+
+        # Inject CPU batch-size overrides right before the Setup section
+        source = source.replace(
+            "# ---------------------------------------------------------------------------\n# Setup: tokenizer",
+            _SMOKE_OVERRIDES + "# ---------------------------------------------------------------------------\n# Setup: tokenizer",
+        )
+
+        # Relabel final metric line for smoke_loss grepping
+        source = source.replace(
+            'print(f"val_bpb:          {val_bpb:.6f}")',
+            'print(f"smoke_loss: {val_bpb:.6f}")',
+        )
+
+        return source
+
+    def run_smoke_test(filepath: str) -> dict:
+        """Read train.py, patch it for CPU, run it in a TensorLake sandbox."""
+        import re
+        with open(filepath) as f:
+            source = f.read()
+        cpu_script = _make_cpu_script(source)
+        sb = _SandboxClient()
+        with sb.create_and_connect(memory_mb=2048, timeout_secs=120) as box:
+            box.write_file("/workspace/smoke_train.py", cpu_script.encode())
+            ex = box.run("python3", ["/workspace/smoke_train.py"], timeout=100)
+            stdout = (ex.stdout or "").strip()
+            stderr = (ex.stderr or "").strip()
+        m = re.search(r"smoke_loss:\s*([\d.]+)", stdout)
+        if not m:
+            return {"status": "fail", "error": stderr[-600:] or stdout[-300:]}
+        return {"status": "ok", "smoke_loss": float(m.group(1))}
+
+# ---------------------------------------------------------------------------
 # Hyperparameters (edit these directly, no CLI flags needed)
 # ---------------------------------------------------------------------------
 
@@ -534,6 +685,14 @@ def get_weight_decay(progress):
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
+
+if _TENSORLAKE_SMOKE:
+    print("Running CPU smoke test in TensorLake sandbox...", flush=True)
+    _smoke = run_smoke_test(__file__)
+    if _smoke["status"] == "fail":
+        print(f"SMOKE FAIL: {_smoke.get('error', 'unknown error')}")
+        exit(1)
+    print(f"Smoke test passed (smoke_loss={_smoke['smoke_loss']:.4f})", flush=True)
 
 t_start_training = time.time()
 smooth_train_loss = 0
